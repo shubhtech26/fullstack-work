@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,7 @@ interface Product {
   categoryName: string;
   subCategoryName: string;
   imageUrls: string[];
+  retailPrice: number;
 }
 
 export default function Home() {
@@ -36,6 +37,7 @@ export default function Home() {
   const [categories, setCategories] = useState<string[]>([]);
   const [subCategories, setSubCategories] = useState<string[]>([]);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | undefined>(
     undefined
   );
@@ -43,18 +45,39 @@ export default function Home() {
     string | undefined
   >(undefined);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const debounceTimer = useRef<NodeJS.Timeout | null>(null);
+
+  // Debounce search input
+  useEffect(() => {
+    if (debounceTimer.current) {
+      clearTimeout(debounceTimer.current);
+    }
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+    }, 300);
+
+    return () => {
+      if (debounceTimer.current) {
+        clearTimeout(debounceTimer.current);
+      }
+    };
+  }, [search]);
 
   useEffect(() => {
     fetch("/api/categories")
       .then((res) => res.json())
-      .then((data) => setCategories(data.categories));
+      .then((data) => setCategories(data.categories))
+      .catch((err) => console.error("Failed to fetch categories:", err));
   }, []);
 
   useEffect(() => {
     if (selectedCategory) {
-      fetch(`/api/subcategories`)
+      setSelectedSubCategory(undefined);
+      fetch(`/api/subcategories?category=${encodeURIComponent(selectedCategory)}`)
         .then((res) => res.json())
-        .then((data) => setSubCategories(data.subCategories));
+        .then((data) => setSubCategories(data.subCategories))
+        .catch((err) => console.error("Failed to fetch subcategories:", err));
     } else {
       setSubCategories([]);
       setSelectedSubCategory(undefined);
@@ -63,19 +86,28 @@ export default function Home() {
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     const params = new URLSearchParams();
-    if (search) params.append("search", search);
+    if (debouncedSearch) params.append("search", debouncedSearch);
     if (selectedCategory) params.append("category", selectedCategory);
     if (selectedSubCategory) params.append("subCategory", selectedSubCategory);
     params.append("limit", "20");
 
     fetch(`/api/products?${params}`)
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
         setProducts(data.products);
         setLoading(false);
+      })
+      .catch((err) => {
+        console.error("Failed to fetch products:", err);
+        setError("Failed to load products. Please try again.");
+        setLoading(false);
       });
-  }, [search, selectedCategory, selectedSubCategory]);
+  }, [debouncedSearch, selectedCategory, selectedSubCategory]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -95,6 +127,7 @@ export default function Home() {
             </div>
 
             <Select
+              key={selectedCategory ?? "__all_categories"}
               value={selectedCategory}
               onValueChange={(value) => setSelectedCategory(value || undefined)}
             >
@@ -112,6 +145,7 @@ export default function Home() {
 
             {selectedCategory && subCategories.length > 0 && (
               <Select
+                key={selectedSubCategory ?? "__all_subcategories"}
                 value={selectedSubCategory}
                 onValueChange={(value) =>
                   setSelectedSubCategory(value || undefined)
@@ -135,6 +169,7 @@ export default function Home() {
                 variant="outline"
                 onClick={() => {
                   setSearch("");
+                  setDebouncedSearch("");
                   setSelectedCategory(undefined);
                   setSelectedSubCategory(undefined);
                 }}
@@ -151,6 +186,10 @@ export default function Home() {
           <div className="text-center py-12">
             <p className="text-muted-foreground">Loading products...</p>
           </div>
+        ) : error ? (
+          <div className="text-center py-12">
+            <p className="text-red-500">{error}</p>
+          </div>
         ) : products.length === 0 ? (
           <div className="text-center py-12">
             <p className="text-muted-foreground">No products found</p>
@@ -164,10 +203,7 @@ export default function Home() {
               {products.map((product) => (
                 <Link
                   key={product.stacklineSku}
-                  href={{
-                    pathname: "/product",
-                    query: { product: JSON.stringify(product) },
-                  }}
+                  href={`/product/${product.stacklineSku}`}
                 >
                   <Card className="h-full hover:shadow-lg transition-shadow cursor-pointer">
                     <CardHeader className="p-0">
@@ -196,8 +232,11 @@ export default function Home() {
                         </Badge>
                       </CardDescription>
                     </CardContent>
-                    <CardFooter>
-                      <Button variant="outline" className="w-full">
+                    <CardFooter className="flex justify-between items-center">
+                      <span className="text-lg font-semibold">
+                        ${product.retailPrice.toFixed(2)}
+                      </span>
+                      <Button variant="outline" size="sm">
                         View Details
                       </Button>
                     </CardFooter>
